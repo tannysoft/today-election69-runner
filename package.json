@@ -1,0 +1,17 @@
+{
+    "name": "election69-runner",
+    "version": "1.0.0",
+    "description": "Script to sync election data",
+    "type": "module",
+    "main": "sync-provinces.js",
+    "scripts": {
+        "start": "node sync-provinces.js",
+        "start:parties": "node sync-parties.js",
+        "start:candidates": "node sync-candidates.js"
+    },
+    "dependencies": {
+        "axios": "^1.6.0",
+        "dotenv": "^17.2.3",
+        "pocketbase": "^0.26.6"
+    }
+}
