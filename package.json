@@ -7,7 +7,11 @@
     "scripts": {
         "start": "node sync-provinces.js",
         "start:parties": "node sync-parties.js",
-        "start:candidates": "node sync-candidates.js"
+        "start:candidates": "node sync-candidates.js",
+        "start:score": "node sync-score.js",
+        "start:areas": "node sync-areas.js",
+        "start:partylist": "node sync-partylist.js",
+        "start:partylist-results": "node sync-partylist-results.js"
     },
     "dependencies": {
         "axios": "^1.6.0",

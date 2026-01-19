@@ -32,12 +32,14 @@ export async function authenticate() {
             await pb.collection('users').authWithPassword(CONFIG.EMAIL, CONFIG.PASSWORD);
             console.log('✅ User Authentication successful.');
         } catch (userAuthError) {
+            console.warn('User Auth Failed:', JSON.stringify(userAuthError, Object.getOwnPropertyNames(userAuthError), 2));
             // Fallback to superuser/admin
             await pb.admins.authWithPassword(CONFIG.EMAIL, CONFIG.PASSWORD);
             console.log('✅ Admin Authentication successful.');
         }
         return pb;
     } catch (error) {
+        console.error('Full Auth Error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
         throw new Error(`Authentication Failed: ${error.message}`);
     }
 }

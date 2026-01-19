@@ -9,7 +9,7 @@ const CONFIG = {
         TOKEN: process.env.SOURCE_TOKEN,
     },
     POCKETBASE: {
-        COLLECTION: process.env.PB_COLLECTION || 'provinces',
+        COLLECTION: process.env.PB_PROVINCE_COLLECTION || 'provinces',
     },
 };
 

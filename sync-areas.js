@@ -5,13 +5,12 @@ import { authenticate } from './pb.js';
 // --- CONFIGURATION ---
 const CONFIG = {
     SOURCE: {
-        URL: process.env.SOURCE_CANDIDATES_STATIC_URL,
+        URL: process.env.SOURCE_AREAS_URL,
         TOKEN: process.env.SOURCE_TOKEN,
-        PER_PAGE: 100 // Adjust if needed, API inspection showed no pagination key in 'data' root but likely supports it or returns all? 
-        // Inspection showed keys: [ 'electionId', 'candidates', 'pagination' ] so it supports pagination.
+        PER_PAGE: 100
     },
     POCKETBASE: {
-        COLLECTION: 'candidates',
+        COLLECTION: 'areas',
     },
 };
 
@@ -30,7 +29,7 @@ async function fetchPage(page) {
         });
 
         const data = response.data.data;
-        const items = data.candidates || [];
+        const items = data.electionAreas || [];
         const pagination = data.pagination || {};
 
         return { items, pagination };
@@ -39,33 +38,15 @@ async function fetchPage(page) {
     }
 }
 
-// --- CACHES ---
-let partyCache = null;
+// Cache for provinces: name -> id
 let provinceCache = null;
-let areaCache = null;
-
-async function getPartyId(pb, partyName) {
-    if (!partyCache) {
-        console.log('🔄 Loading parties to cache...');
-        partyCache = new Map();
-        try {
-            const records = await pb.collection(CONFIG.POCKETBASE.COLLECTION_PARTIES || 'parties').getFullList();
-            for (const record of records) {
-                partyCache.set(record.name, record.id);
-            }
-            console.log(`✅ Cached ${partyCache.size} parties.`);
-        } catch (e) {
-            console.error('❌ Failed to cache parties:', e.message);
-        }
-    }
-    return partyCache.get(partyName);
-}
 
 async function getProvinceId(pb, provinceName) {
     if (!provinceCache) {
         console.log('🔄 Loading provinces to cache...');
         provinceCache = new Map();
         try {
+            // Fetch all provinces (limit 1000)
             const records = await pb.collection(CONFIG.POCKETBASE.COLLECTION_PROVINCES || 'provinces').getFullList();
             for (const record of records) {
                 provinceCache.set(record.name, record.id);
@@ -78,109 +59,58 @@ async function getProvinceId(pb, provinceName) {
     return provinceCache.get(provinceName);
 }
 
-async function getAreaId(pb, provinceId, areaNumber) {
-    if (!areaCache) {
-        console.log('🔄 Loading areas to cache...');
-        areaCache = new Map();
-        try {
-            const records = await pb.collection(CONFIG.POCKETBASE.COLLECTION_AREAS || 'areas').getFullList();
-            for (const record of records) {
-                const key = `${record.province}_${record.number}`;
-                areaCache.set(key, record.id);
-            }
-            console.log(`✅ Cached ${areaCache.size} areas.`);
-        } catch (e) {
-            console.error('❌ Failed to cache areas:', e.message);
-        }
-    }
-    return areaCache.get(`${provinceId}_${areaNumber}`);
-}
-
 /**
- * Sync a single item (Static Profile Data)
+ * Sync a single item to PocketBase with Smart Update
  */
 async function syncItem(pb, item) {
-    // Resolve Relations
-    const partyName = item.party?.name;
-    const partyId = await getPartyId(pb, partyName);
-
+    // Resolve province
     const provinceName = item.province?.name;
     const provinceId = await getProvinceId(pb, provinceName);
 
-    // Provide default area number if missing, or extract from electionArea object
-    // API item: { electionArea: { areaNumber: 3, ... } }
-    const areaNumber = item.electionArea?.areaNumber;
-    let areaId = null;
-    if (provinceId && areaNumber) {
-        areaId = await getAreaId(pb, provinceId, areaNumber);
+    if (!provinceId) {
+        console.warn(`   [⚠️ WARNING] Province not found: ${provinceName} for area ${item.name}`);
     }
 
-    if (!partyId) console.warn(`   [⚠️ WARNING] Party not found: ${partyName}`);
-    if (!provinceId) console.warn(`   [⚠️ WARNING] Province not found: ${provinceName}`);
-    if (provinceId && areaNumber && !areaId) console.warn(`   [⚠️ WARNING] Area not found: ${provinceName} #${areaNumber}`);
-
-    // Construct Payload
-    // Include all static profile fields
     const payload = {
         name: item.name,
-        // Profile fields
-        title: item.title,
-        firstName: item.firstName,
-        lastName: item.lastName,
-        photoUrl: item.photoUrl,
-        active: item.active,
-
-        // Basic fields (ensure consistency)
+        // electionId: item.electionId, // Optional if needed
         number: item.number,
-        provinceCode: item.province?.code,
-        provinceName: item.province?.name,
-        areaNumber: areaNumber,
-
-        // Relations
-        party: partyId,
+        eligibleVoters: item.eligibleVoters,
         province: provinceId,
-        area: areaId,
     };
 
     try {
+        // Check for existing record by name
         let existing = null;
         try {
-            // Check by name
             existing = await pb.collection(CONFIG.POCKETBASE.COLLECTION).getFirstListItem(`name="${item.name}"`);
         } catch (err) {
             if (err.status !== 404) throw err;
         }
 
         if (existing) {
-            // Check for changes in PROFILE data
-            // We do NOT check votes/rank here (handled by sync-score.js)
+            // Check if update is needed
             const isChanged =
-                existing.title !== payload.title ||
-                existing.firstName !== payload.firstName ||
-                existing.lastName !== payload.lastName ||
-                existing.photoUrl !== payload.photoUrl ||
-                existing.active !== payload.active ||
-                existing.party !== payload.party ||
+                existing.eligibleVoters !== payload.eligibleVoters ||
                 existing.province !== payload.province ||
-                existing.area !== payload.area;
+                existing.number !== payload.number;
 
             if (isChanged) {
                 await pb.collection(CONFIG.POCKETBASE.COLLECTION).update(existing.id, payload);
-                console.log(`   [🔁 UPDATED] ${item.name} (Profile Updated)`);
+                console.log(`   [🔁 UPDATED] ${item.name}`);
                 return 'updated';
             } else {
                 console.log(`   [⏭️ NO CHANGE] ${item.name}`);
                 return 'skipped';
             }
         } else {
-            // Create new candidate
             await pb.collection(CONFIG.POCKETBASE.COLLECTION).create(payload);
             console.log(`   [✅ CREATED] ${item.name}`);
             return 'created';
         }
     } catch (error) {
         console.error(`   [❌ FAIL] ${item.name}: ${error.message}`);
-        // console.error(JSON.stringify(error.data, null, 2));
+        console.error(JSON.stringify(error.data, null, 2));
         return 'failed';
     }
 }
@@ -189,7 +119,7 @@ async function main() {
     try {
         const pb = await authenticate();
 
-        console.log('🚀 Starting Candidate Profile Sync...');
+        console.log('🚀 Starting sync...');
         let stats = { created: 0, updated: 0, skipped: 0, failed: 0 };
 
         let page = 1;
@@ -213,7 +143,8 @@ async function main() {
                 else stats.failed++;
             }
 
-            if (pagination.totalPages && page >= pagination.totalPages) {
+            // Check if we reached the last page
+            if (page >= pagination.totalPages) {
                 hasMore = false;
             } else {
                 page++;
