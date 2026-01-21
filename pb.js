@@ -1,4 +1,11 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '.env') });
+
 import PocketBase from 'pocketbase';
 
 // --- CONFIGURATION ---
@@ -32,7 +39,8 @@ export async function authenticate() {
             await pb.collection('users').authWithPassword(CONFIG.EMAIL, CONFIG.PASSWORD);
             console.log('✅ User Authentication successful.');
         } catch (userAuthError) {
-            console.warn('User Auth Failed:', JSON.stringify(userAuthError, Object.getOwnPropertyNames(userAuthError), 2));
+            // console.warn('User Auth Failed:', JSON.stringify(userAuthError, Object.getOwnPropertyNames(userAuthError), 2));
+            console.log('ℹ️  User auth failed, trying Admin auth...');
             // Fallback to superuser/admin
             await pb.admins.authWithPassword(CONFIG.EMAIL, CONFIG.PASSWORD);
             console.log('✅ Admin Authentication successful.');

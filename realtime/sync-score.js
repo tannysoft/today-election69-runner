@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import axios from 'axios';
-import { authenticate } from './pb.js';
+import { authenticate } from '../pb.js';
 
 // --- CONFIGURATION ---
 const CONFIG = {

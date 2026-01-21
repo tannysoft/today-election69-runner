@@ -1,21 +1,20 @@
 import 'dotenv/config';
 import axios from 'axios';
-import { authenticate } from './pb.js';
+import { authenticate } from '../pb.js';
 
 // --- CONFIGURATION ---
 const CONFIG = {
     SOURCE: {
-        URL: process.env.SOURCE_PARTYLIST_RESULTS_URL,
+        URL: process.env.SOURCE_NATIONAL_SUMMARY_REALTIME_URL,
         TOKEN: process.env.SOURCE_TOKEN,
     },
     POCKETBASE: {
-        COLLECTION: 'partylistResults', // User specified 'partylistResults'
+        COLLECTION: 'parties',
     },
 };
 
 /**
  * Fetch data from the source API
- * Note: This API seems to return all results in one go, not paginated pages of items.
  */
 async function fetchData() {
     console.log(`🌐 Fetching data from: ${CONFIG.SOURCE.URL}`);
@@ -24,74 +23,46 @@ async function fetchData() {
             headers: { Authorization: `Bearer ${CONFIG.SOURCE.TOKEN}` }
         });
 
-        const data = response.data.data;
-        const items = data.parties || [];
-
+        // Structure is { data: { parties: [...] }, ... }
+        const items = response.data.data.parties || [];
+        console.log(`📦 Found ${items.length} parties to sync.`);
         return items;
     } catch (error) {
         throw new Error(`Fetch Failed: ${error.message}`);
     }
 }
 
-// --- CACHES ---
-let partyCache = null;
-
-async function getPartyId(pb, partyName) {
-    if (!partyCache) {
-        console.log('🔄 Loading parties to cache...');
-        partyCache = new Map();
-        try {
-            const records = await pb.collection(process.env.PB_COLLECTION_PARTIES || 'parties').getFullList();
-            for (const record of records) {
-                partyCache.set(record.name, record.id);
-            }
-            console.log(`✅ Cached ${partyCache.size} parties.`);
-        } catch (e) {
-            console.error('❌ Failed to cache parties:', e.message);
-        }
-    }
-    return partyCache.get(partyName);
-}
-
 /**
- * Sync a single item
+ * Sync a single item to PocketBase
  */
 async function syncItem(pb, item) {
-    // Resolve Relations
     const partyName = item.party?.name;
-    const partyId = await getPartyId(pb, partyName);
 
-    if (!partyId) console.warn(`   [⚠️ WARNING] Party not found: ${partyName}`);
-
-    // Construct Payload
+    // Fields to update/create
     const payload = {
+        name: partyName, // Ensure name is included for creation
         totalVotes: item.totalVotes,
-        automaticSeats: item.automaticSeats,
-        remainder: item.remainder,
-        remainderSeats: item.remainderSeats,
+        constituencySeats: item.constituencySeats,
+        partyListSeats: item.partyListSeats,
         totalSeats: item.totalSeats,
         percentage: item.percentage,
-        party: partyId,
     };
 
     try {
         let existing = null;
         try {
-            // Check by party ID (assuming one result record per party)
-            if (partyId) {
-                existing = await pb.collection(CONFIG.POCKETBASE.COLLECTION).getFirstListItem(`party="${partyId}"`);
-            }
+            // Find party by name
+            existing = await pb.collection(CONFIG.POCKETBASE.COLLECTION).getFirstListItem(`name="${partyName}"`);
         } catch (err) {
             if (err.status !== 404) throw err;
         }
 
         if (existing) {
-            // Check for changes
+            // Check if update is needed
             const isChanged =
                 existing.totalVotes !== payload.totalVotes ||
-                existing.automaticSeats !== payload.automaticSeats ||
-                existing.remainder !== payload.remainder ||
-                existing.remainderSeats !== payload.remainderSeats ||
+                existing.constituencySeats !== payload.constituencySeats ||
+                existing.partyListSeats !== payload.partyListSeats ||
                 existing.totalSeats !== payload.totalSeats ||
                 existing.percentage !== payload.percentage;
 
@@ -104,7 +75,7 @@ async function syncItem(pb, item) {
                 return 'skipped';
             }
         } else {
-            // Create new
+            // Create new record
             await pb.collection(CONFIG.POCKETBASE.COLLECTION).create(payload);
             console.log(`   [✅ CREATED] ${partyName}`);
             return 'created';
@@ -119,17 +90,16 @@ async function main() {
     try {
         const pb = await authenticate();
 
-        console.log('🚀 Starting Party List Results Sync...');
+        console.log('🚀 Starting National Parties Sync...');
         let stats = { created: 0, updated: 0, skipped: 0, failed: 0 };
 
         const items = await fetchData();
-        console.log(`📦 Processing ${items.length} items...`);
 
         for (const item of items) {
             const result = await syncItem(pb, item);
             if (result === 'created') stats.created++;
             else if (result === 'updated') stats.updated++;
-            else if (result === 'skipped') stats.skipped++;
+            else if (result === 'skipped') stats.skipped++; // 'skipped' means no change
             else stats.failed++;
         }
 
@@ -137,12 +107,12 @@ async function main() {
         console.log(`🏁 Sync Complete.`);
         console.log(`✅ Created: ${stats.created}`);
         console.log(`🔁 Updated: ${stats.updated}`);
-        console.log(`⏭️ No Change: ${stats.skipped}`);
+        console.log(`⏭️ Skipped: ${stats.skipped}`);
         console.log(`❌ Failed:  ${stats.failed}`);
 
     } catch (error) {
         console.error(`\n⛔ FATAL ERROR: ${error.message}`);
-        process.exit(1);
+        // process.exit(1); // Optional: keep process alive if running in interval later? For now just exit.
     }
 }
 
